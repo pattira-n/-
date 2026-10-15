@@ -1,18 +1,16 @@
 import streamlit as st
 import pandas as pd
 import io
+import re
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
 
-# ตั้งค่าหน้าเว็บ Streamlit (ให้แสดงผลแบบ Wide เต็มจอ)
 st.set_page_config(page_title="ระบบประมวลผลและวิเคราะห์ราคา", layout="wide", initial_sidebar_state="collapsed")
 
-# Custom CSS ที่เจาะจงเฉพาะคลาสของเรา ป้องกันการไปโดนปุ่มอัปโหลดของ Streamlit
 st.markdown("""
     <style>
     @import url('https://fonts.googleapis.com/css2?family=Kanit:wght@300;400;500;600&display=swap');
 
-    /* กำหนดฟอนต์ Kanit เฉพาะหัวข้อและบล็อกดีไซน์ของเราเท่านั้น ไม่แตะต้องปุ่มอัปโหลด */
     .banner-main-title, .banner-sub-title, .card-header, .card-subheader, 
     .sub-card-green, .sub-card-red, .stat-number, .stat-label, .stat-unit, h1, h2, h3 {
         font-family: 'Kanit', sans-serif !important;
@@ -22,7 +20,6 @@ st.markdown("""
     footer {visibility: hidden;}
     header {visibility: hidden;}
 
-    /* Banner ส่วนหัวข้อหลัก (พื้นหลังสีน้ำเงินเข้ม #0d2137) */
     .banner-container {
         background-color: #0d2137;
         border-radius: 16px;
@@ -42,7 +39,6 @@ st.markdown("""
         color: #9fb3c8;
     }
 
-    /* การ์ดแดชบอร์ดหลักสำหรับ YoY และ MoM */
     .dashboard-card {
         background-color: #f0f4f8;
         border: 1px solid #d9e2ec;
@@ -63,7 +59,6 @@ st.markdown("""
         margin-bottom: 16px;
     }
 
-    /* บล็อกย่อย: ปรับราคาสูงขึ้น (พาสเทลเขียว #c5e1a5, ตัวหนังสือ #33691e) */
     .sub-card-green {
         background-color: #c5e1a5;
         border-radius: 12px;
@@ -73,7 +68,6 @@ st.markdown("""
         color: #33691e;
     }
 
-    /* บล็อกย่อย: ปรับราคาลดลง (พาสเทลแดง #f9bdbb, ตัวหนังสือ #b0120a) */
     .sub-card-red {
         background-color: #f9bdbb;
         border-radius: 12px;
@@ -100,7 +94,6 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# 1. แสดง Banner ส่วนหัวข้อหลัก
 st.markdown("""
     <div class="banner-container">
         <div class="banner-main-title">📊 ระบบประมวลผลและวิเคราะห์ราคาสินค้าสำคัญ</div>
@@ -108,17 +101,29 @@ st.markdown("""
     </div>
 """, unsafe_allow_html=True)
 
-# 2. ส่วนอัปโหลดไฟล์ (ใช้ค่าเริ่มต้นปกติ ปลอดภัยไม่ซ้อนกันแน่นอน)
 uploaded_file = st.file_uploader("📂 เลือกไฟล์ Excel ผลลัพธ์ (.xlsx)", type=["xlsx"])
 
 if uploaded_file is not None:
     try:
         df = pd.read_excel(uploaded_file)
-        st.success("✅ อัปโหลดและอ่านไฟล์สำเร็จ!")
         
-        # -------------------------------------------------------------
-        # 3. การประมวลผลข้อมูลตามเงื่อนไข (Business Logic & Sorting)
-        # -------------------------------------------------------------
+        # ค้นหาคอลัมน์ปี พ.ศ. 4 หลักแบบอัตโนมัติ
+        year_columns = []
+        for col in df.columns:
+            col_str = str(col).strip()
+            if re.match(r'^\d{4}$', col_str):
+                year_columns.append(col)
+                
+        year_columns = sorted(year_columns, key=lambda x: int(str(x)))
+        
+        if len(year_columns) < 2:
+            st.error("⚠️ ไม่พบคอลัมน์ปี พ.ศ. อย่างน้อย 2 ปีในไฟล์ Excel กรุณาตรวจสอบหัวตาราง")
+            st.stop()
+            
+        prev_year = year_columns[-2]
+        current_year = year_columns[-1]
+        
+        st.success(f"✅ อัปโหลดและอ่านไฟล์สำเร็จ! ระบบกำลังเปรียบเทียบข้อมูลปี {prev_year} และ {current_year}")
         
         def assign_unit(name):
             name_str = str(name).strip()
@@ -139,25 +144,24 @@ if uploaded_file is not None:
         df['COMMODITY_NAME'] = df['COMMODITY_NAME'].replace(name_mapping)
         
         def fix_previous_year_price(row):
-            p2569 = row.get('2569', 0)
-            p2568 = row.get('2568', 0)
+            p_curr = row.get(current_year, 0)
+            p_prev = row.get(prev_year, 0)
             yoy = row.get('YoY', 0)
             
-            if pd.notna(p2569) and pd.notna(p2568) and pd.notna(yoy):
+            if pd.notna(p_curr) and pd.notna(p_prev) and pd.notna(yoy):
                 is_yoy_positive = yoy > 0
-                is_price_increasing = p2569 > p2568
+                is_price_increasing = p_curr > p_prev
                 
                 if is_yoy_positive != is_price_increasing and (1 + yoy / 100) != 0:
-                    return round(p2569 / (1 + yoy / 100), 2)
-            return p2568
+                    return round(p_curr / (1 + yoy / 100), 2)
+            return p_prev
 
-        df['2568'] = df.apply(fix_previous_year_price, axis=1)
+        df[prev_year] = df.apply(fix_previous_year_price, axis=1)
         
         egg_mask = df['COMMODITY_NAME'] == "ไข่ไก่ (เบอร์ 2)"
-        df.loc[egg_mask, '2568'] = (df.loc[egg_mask, '2568'] / 30).round(2)
-        df.loc[egg_mask, '2569'] = (df.loc[egg_mask, '2569'] / 30).round(2)
+        df.loc[egg_mask, prev_year] = (df.loc[egg_mask, prev_year] / 30).round(2)
+        df.loc[egg_mask, current_year] = (df.loc[egg_mask, current_year] / 30).round(2)
         
-        # กำหนดกลุ่มฝั่ง (เขียว = บวก, แดง = ลบ)
         df['Group'] = df.apply(lambda r: 'เขียว' if (r['YoY'] >= 0 and r.get('ContributeYoY', 0) >= 0) else 'แดง', axis=1)
         
         priority_items = [
@@ -173,10 +177,7 @@ if uploaded_file is not None:
         df_green = df[df['Group'] == 'เขียว'].copy()
         df_red = df[df['Group'] == 'แดง'].copy()
         
-        # ฝั่งบวก: 3 รายการหลักขึ้นก่อน, ตามด้วย Contribute จากมากไปน้อย
         df_green = df_green.sort_values(by=['IsPriority', contribute_col], ascending=[True, False])
-        
-        # ฝั่งลบ: 3 รายการหลักขึ้นก่อน, ตามด้วย Contribute ติดลบมากไปน้อย
         df_red = df_red.sort_values(by=['IsPriority', contribute_col], ascending=[True, True])
         
         df = pd.concat([df_green, df_red]).reset_index(drop=True)
@@ -189,9 +190,6 @@ if uploaded_file is not None:
         mom_positive_count = len(df_for_count[df_for_count['MoM'] > 0])
         mom_negative_count = len(df_for_count[df_for_count['MoM'] < 0])
         
-        # -------------------------------------------------------------
-        # 4. ส่วนแสดงผลบล็อกสรุป (UI & Styling)
-        # -------------------------------------------------------------
         st.markdown("---")
         
         col1, col2 = st.columns(2)
@@ -237,14 +235,13 @@ if uploaded_file is not None:
             """, unsafe_allow_html=True)
             
         st.markdown("---")
-        st.subheader("📋 ตารางแสดงรายการสินค้าสำคัญ")
+        st.subheader(f"📋 ตารางแสดงรายการสินค้า (ปี {prev_year} - {current_year})")
         
-        display_df = df[['COMMODITY_NAME', 'หน่วย', '2568', '2569']].copy()
-        display_df['2568'] = display_df['2568'].map('{:,.2f}'.format)
-        display_df['2569'] = display_df['2569'].map('{:,.2f}'.format)
+        display_df = df[['COMMODITY_NAME', 'หน่วย', prev_year, current_year]].copy()
+        display_df[prev_year] = display_df[prev_year].map('{:,.2f}'.format)
+        display_df[current_year] = display_df[current_year].map('{:,.2f}'.format)
         
         def style_table(row):
-            styles = [''] * len(row)
             yoy_val = df.loc[row.name, 'YoY']
             item_name = str(df.loc[row.name, 'COMMODITY_NAME']).strip()
             
@@ -269,8 +266,8 @@ if uploaded_file is not None:
         
         output = io.BytesIO()
         with pd.ExcelWriter(output, engine='openpyxl') as writer:
-            export_df = df[['COMMODITY_NAME', 'หน่วย', '2568', '2569']].copy()
-            export_df.columns = ['ชื่อสินค้า', 'หน่วย', '2568', '2569']
+            export_df = df[['COMMODITY_NAME', 'หน่วย', prev_year, current_year]].copy()
+            export_df.columns = ['ชื่อสินค้า', 'หน่วย', str(prev_year), str(current_year)]
             export_df.to_excel(writer, index=False, sheet_name='Price_Report')
             
             workbook = writer.book
@@ -333,7 +330,7 @@ if uploaded_file is not None:
         st.download_button(
             label="📥 ดาวน์โหลดไฟล์ Excel รายงานผลลัพธ์",
             data=excel_data,
-            file_name="final_styled_report.xlsx",
+            file_name=f"price_report_{prev_year}_{current_year}.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
         
