@@ -156,11 +156,23 @@ if uploaded_file is not None:
                     return round(p_curr / (1 + yoy / 100), 2)
             return p_prev
 
-        df[prev_year] = df.apply(fix_previous_year_price, axis=1)
-        
+        # --- จัดการหน่วยและคำนวณราคาไข่ไก่ (รองรับทั้งแบบแผงและแบบฟอง) ---
         egg_mask = df['COMMODITY_NAME'] == "ไข่ไก่ (เบอร์ 2)"
-        df.loc[egg_mask, prev_year] = (df.loc[egg_mask, prev_year] / 30).round(2)
-        df.loc[egg_mask, current_year] = (df.loc[egg_mask, current_year] / 30).round(2)
+        
+        # 1. เช็กและแปลงปีปัจจุบัน (current_year) ให้เป็นราคาต่อฟอง (ถ้ามากกว่า 20 แสดงว่าเป็นราคาแผง)
+        if df.loc[egg_mask, current_year].values.size > 0:
+            curr_val = df.loc[egg_mask, current_year].values[0]
+            if pd.notna(curr_val) and curr_val > 20:
+                df.loc[egg_mask, current_year] = (df.loc[egg_mask, current_year] / 30).round(2)
+
+        # 2. คำนวณราคาย้อนกลับสำหรับปีปีก่อน (prev_year) จากสูตร YoY
+        df[prev_year] = df.apply(fix_previous_year_price, axis=1)
+
+        # 3. เช็กและแปลงปีปีก่อน (prev_year) ให้เป็นราคาต่อฟองเช่นกัน (ถ้ามากกว่า 20 แสดงว่าเป็นราคาแผง)
+        if df.loc[egg_mask, prev_year].values.size > 0:
+            prev_val = df.loc[egg_mask, prev_year].values[0]
+            if pd.notna(prev_val) and prev_val > 20:
+                df.loc[egg_mask, prev_year] = (df.loc[egg_mask, prev_year] / 30).round(2)
         
         df['Group'] = df.apply(lambda r: 'เขียว' if (r['YoY'] >= 0 and r.get('ContributeYoY', 0) >= 0) else 'แดง', axis=1)
         
